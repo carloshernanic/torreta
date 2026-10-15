@@ -1,0 +1,9 @@
+# ambiente
+.venv/
+__pycache__/
+*.pyc
+
+# arquivos de torrent e estado nunca vão para o repositório
+*.torrent
+*.fastresume
+*.fastresume.tmp
