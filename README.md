@@ -11,6 +11,8 @@ Feito depois de dissecar o uTorrent Web com o [REA](https://github.com/morluto/r
 - **Escolher quais arquivos baixar** dentro do torrent, com progresso por arquivo.
 - **Baixar em ordem** (sequencial) para assistir a um vídeo enquanto ele baixa.
 - Limites de velocidade, porta de escuta e pasta de downloads configuráveis.
+- **Trackers públicos adicionados automaticamente** a torrents não privados (mais fontes de peers; torrents privados nunca os recebem — em magnets, só depois dos metadados confirmarem que não é privado). Desligável em ⚙.
+- Ajuda para **limitar o upload a 80% da sua subida**, o que evita que o download caia em conexões assimétricas.
 - DHT, PEX, LSD, uTP, UPnP/NAT-PMP e criptografia de peers ligados por padrão (engine **libtorrent 2.x**, o mesmo do qBittorrent e do próprio uTorrent Web).
 
 ## Em que ele é melhor que o uTorrent Web
@@ -59,6 +61,10 @@ torreta/
   __main__.py   sobe servidor + janela (pywebview) ou navegador
   static/       interface: HTML/CSS/JS puro, sem build
 ```
+
+## Sobre velocidade
+
+O que limita a velocidade é, nesta ordem: quantos seeds o torrent tem, a sua conexão (cabo > Wi-Fi 5 GHz > Wi-Fi 2.4 GHz) e se você aceita conexões de entrada (atrás de CGNAT, não aceita — só IP público, IPv6 ou VPN com *port forwarding* resolvem). Dos ajustes de software, só dois têm efeito comprovado e ambos estão no Torreta: trackers públicos extras e limite de upload em ~80% da subida. "Presets de alto desempenho", milhares de conexões e afins não movem esse teto e foram deixados de fora de propósito.
 
 ## Limitações / próximos passos
 
