@@ -55,6 +55,10 @@
       <dt>Trackers</dt><dd id="d-trackers">—</dd>
       <dt>Hash</dt><dd id="d-hash" class="mono">—</dd>
     </dl>
+    <div class="details-actions">
+      <button id="d-reannounce" class="small" title="Pede peers novos aos trackers e ao DHT agora">Reanunciar</button>
+      <button id="d-recheck" class="small" title="Verifica os dados já gravados no disco">Verificar dados</button>
+    </div>
     <div class="files-head">
       <h3>Arquivos</h3>
       <div class="files-actions">
@@ -72,20 +76,15 @@
 <dialog id="dlg-settings">
   <form method="dialog" id="form-settings">
     <h2>Configurações</h2>
+
+    <h3 class="section">Downloads</h3>
     <label>Pasta de downloads
       <div class="inline">
         <input name="download_dir" type="text" required>
-        <button type="button" id="btn-pick" class="small" hidden>Escolher…</button>
+        <button type="button" class="small pick" data-target="download_dir" hidden>Escolher…</button>
       </div>
     </label>
     <div class="grid2">
-      <label>Porta de escuta
-        <input name="listen_port" type="number" min="1024" max="65535" required>
-        <small id="port-note" class="warn-text" hidden></small>
-      </label>
-      <label><span>&nbsp;</span>
-        <span class="check"><input name="sequential_default" type="checkbox"> Baixar em ordem por padrão</span>
-      </label>
       <label>Limite de download (KiB/s, 0 = sem limite)
         <input name="download_limit_kib" type="number" min="0" required>
       </label>
@@ -99,8 +98,65 @@
         </div>
         <small class="muted">Em conexões com upload bem menor que o download, limitar o upload a ~80% evita que o download caia.</small>
       </label>
+      <label>Parar de semear na proporção (0 = semear sempre)
+        <input name="seed_ratio_limit" type="number" min="0" step="0.1" required>
+        <small class="muted">Proporção = enviado ÷ baixado. Ao atingir, o torrent é pausado.</small>
+      </label>
+    </div>
+    <label class="check"><input name="sequential_default" type="checkbox"> Baixar em ordem por padrão (bom para vídeos; um pouco mais lento)</label>
+
+    <h3 class="section">Rede e privacidade</h3>
+    <div class="grid2">
+      <label>Porta de escuta
+        <input name="listen_port" type="number" min="1024" max="65535" required>
+        <small id="port-note" class="warn-text" hidden></small>
+      </label>
+      <label>Criptografia entre peers
+        <select name="encryption">
+          <option value="prefer">Preferir (padrão: aceita ambos)</option>
+          <option value="require">Exigir (só peers criptografados)</option>
+          <option value="none">Desligada</option>
+        </select>
+        <small class="muted">"Exigir" ajuda se a operadora limita BitTorrent, mas reduz o número de peers.</small>
+      </label>
     </div>
     <label class="check"><input name="extra_trackers" type="checkbox"> Adicionar trackers públicos a torrents não privados (mais fontes de peers)</label>
+    <label>Lista de trackers (um por linha)
+      <textarea name="tracker_list" rows="5" spellcheck="false"></textarea>
+      <small class="muted">Listas atualizadas: <a href="https://github.com/ngosang/trackerslist" target="_blank" rel="noopener">ngosang/trackerslist</a>. Torrents privados nunca recebem estes trackers.</small>
+    </label>
+
+    <h3 class="section">Automação</h3>
+    <label>Pasta vigiada: todo .torrent salvo nela é adicionado automaticamente (vazio = desligado)
+      <div class="inline">
+        <input name="watch_dir" type="text" placeholder="ex.: C:\Users\você\Downloads">
+        <button type="button" class="small pick" data-target="watch_dir" hidden>Escolher…</button>
+      </div>
+      <small class="muted">Os arquivos adicionados são movidos para a subpasta "adicionados".</small>
+    </label>
+    <label class="check"><input name="slow_detect" type="checkbox"> Avisar quando um download ficar lento ou parado</label>
+    <div class="grid2">
+      <label>Considerar lento abaixo de (KiB/s)
+        <input name="slow_speed_kib" type="number" min="1" required>
+      </label>
+      <label>Por quanto tempo
+        <select name="slow_interval_s">
+          <option value="180">3 minutos</option>
+          <option value="300">5 minutos</option>
+          <option value="600">10 minutos</option>
+        </select>
+      </label>
+    </div>
+    <label class="check"><input name="prevent_sleep" type="checkbox"> Impedir que o computador suspenda enquanto houver download ativo</label>
+
+    <h3 class="section" id="sys-section">Sistema</h3>
+    <div class="inline" id="register-row">
+      <button type="button" id="btn-register" class="small">Tornar padrão para magnet e .torrent</button>
+      <button type="button" id="btn-unregister" class="small" hidden>Remover associação</button>
+      <span id="register-status" class="muted small-text"></span>
+    </div>
+    <small class="muted">Com isso, clicar num link magnet no navegador ou abrir um .torrent já adiciona aqui — mesmo com o Torreta aberto. Se o Windows não trocar, confirme em Configurações › Aplicativos padrão.</small>
+
     <p class="muted small-text">O Torreta não mostra anúncios, não envia estatísticas e só fala com trackers, DHT e peers dos seus próprios torrents.</p>
     <div class="actions">
       <button type="button" value="cancel" class="ghost" id="settings-cancel">Cancelar</button>
@@ -139,6 +195,7 @@
         <span class="s-eta"></span>
       </div>
       <div class="issue" hidden></div>
+      <div class="note" hidden></div>
     </div>
     <div class="row-actions">
       <button class="icon a-toggle" title="Pausar"></button>

@@ -6,6 +6,19 @@ import os
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
+# trackers públicos estáveis, adicionados a torrents NÃO privados para achar mais peers
+# (mesma prática do qBittorrent e do FDM; torrents privados nunca recebem trackers extras)
+PUBLIC_TRACKERS = [  # verificados respondendo em 2026-10
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.demonii.com:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://explodie.org:6969/announce",
+]
+
+ENCRYPTION_MODES = ("none", "prefer", "require")
+
 
 def default_data_dir() -> Path:
     base = os.environ.get("APPDATA") or str(Path.home())
@@ -16,6 +29,17 @@ def default_download_dir() -> str:
     return str(Path.home() / "Downloads" / "Torreta")
 
 
+def _ensure_dir(value: str, label: str) -> str:
+    value = str(value).strip()
+    if not value:
+        raise ValueError(f"{label} não pode ficar vazia.")
+    try:
+        Path(value).mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise ValueError(f"Não foi possível usar a pasta '{value}': {e.strerror}") from e
+    return value
+
+
 @dataclass
 class Config:
     download_dir: str = field(default_factory=default_download_dir)
@@ -24,6 +48,14 @@ class Config:
     upload_limit_kib: int = 0  # 0 = ilimitado
     sequential_default: bool = False
     extra_trackers: bool = True  # trackers públicos em torrents não privados
+    tracker_list: list[str] = field(default_factory=lambda: list(PUBLIC_TRACKERS))
+    encryption: str = "prefer"  # none | prefer | require
+    seed_ratio_limit: float = 0.0  # 0 = semeia para sempre
+    slow_detect: bool = True
+    slow_speed_kib: int = 10
+    slow_interval_s: int = 300
+    watch_dir: str = ""  # pasta vigiada por .torrent novos ("" = desligado)
+    prevent_sleep: bool = True
     data_dir: Path = field(default_factory=default_data_dir)
 
     # campos que não vão para o JSON
@@ -60,21 +92,40 @@ class Config:
             if key not in known:
                 continue
             if key == "download_dir":
-                value = str(value).strip()
-                if not value:
-                    raise ValueError("A pasta de downloads não pode ficar vazia.")
-                try:
-                    Path(value).mkdir(parents=True, exist_ok=True)
-                except OSError as e:
-                    raise ValueError(f"Não foi possível usar a pasta '{value}': {e.strerror}") from e
+                value = _ensure_dir(value, "A pasta de downloads")
+            elif key == "watch_dir":
+                value = _ensure_dir(value, "A pasta vigiada") if str(value).strip() else ""
             elif key == "listen_port":
                 value = int(value)
                 if not 1024 <= value <= 65535:
                     raise ValueError("A porta precisa estar entre 1024 e 65535.")
             elif key in ("download_limit_kib", "upload_limit_kib"):
                 value = max(0, int(value))
-            elif key in ("sequential_default", "extra_trackers"):
+            elif key in ("sequential_default", "extra_trackers", "slow_detect", "prevent_sleep"):
                 value = bool(value)
+            elif key == "encryption":
+                value = str(value).lower()
+                if value not in ENCRYPTION_MODES:
+                    raise ValueError("Criptografia precisa ser 'none', 'prefer' ou 'require'.")
+            elif key == "tracker_list":
+                if isinstance(value, str):
+                    value = value.splitlines()
+                cleaned: list[str] = []
+                for url in value:
+                    url = str(url).strip()
+                    if not url:
+                        continue
+                    if not url.lower().startswith(("udp://", "http://", "https://", "ws://", "wss://")):
+                        raise ValueError(f"Tracker inválido: '{url}' (use udp://, http:// ou https://).")
+                    if url not in cleaned:
+                        cleaned.append(url)
+                value = cleaned
+            elif key == "seed_ratio_limit":
+                value = max(0.0, float(value))
+            elif key == "slow_speed_kib":
+                value = max(1, int(value))
+            elif key == "slow_interval_s":
+                value = max(30, int(value))
             setattr(self, key, value)
 
     def save(self) -> None:

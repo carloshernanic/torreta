@@ -131,6 +131,9 @@
     const issue = $(".issue", li);
     issue.hidden = !t.issue;
     issue.textContent = t.issue || "";
+    const note = $(".note", li);
+    note.hidden = !t.note || !!t.issue;
+    note.textContent = t.note || "";
 
     const toggle = $(".a-toggle", li);
     toggle.textContent = t.paused ? "▶" : "❚❚";
@@ -205,6 +208,16 @@
   $("#f-none").addEventListener("click", () =>
     setPriority(Object.fromEntries(filesCache.map((f) => [f.index, 0]))));
   $("#d-close").addEventListener("click", closeDetails);
+  $("#d-reannounce").addEventListener("click", async () => {
+    if (!selectedId) return;
+    try { await api("POST", `/torrents/${selectedId}/reannounce`); toast("Pedido de peers enviado aos trackers e ao DHT.", "ok"); }
+    catch (e) { toast(e.message, "error"); }
+  });
+  $("#d-recheck").addEventListener("click", async () => {
+    if (!selectedId) return;
+    try { await api("POST", `/torrents/${selectedId}/recheck`); toast("Verificando os dados no disco…", "ok"); }
+    catch (e) { toast(e.message, "error"); }
+  });
 
   // ------------------------------------------------------------------ actions
   async function addMagnet() {
@@ -328,20 +341,40 @@
   // configurações
   const dlg = $("#dlg-settings");
   const form = $("#form-settings");
+  function renderRegister() {
+    const can = !!state.can_register;
+    $("#sys-section").hidden = !can;
+    $("#register-row").hidden = !can;
+    $("#register-row").nextElementSibling.hidden = !can;
+    if (!can) return;
+    $("#btn-register").hidden = !!state.registered;
+    $("#btn-unregister").hidden = !state.registered;
+    $("#register-status").textContent = state.registered ? "✓ O Torreta é o app padrão para magnet e .torrent." : "";
+  }
   $("#btn-settings").addEventListener("click", () => {
     const s = state.settings;
-    form.elements.download_dir.value = s.download_dir || "";
-    form.elements.listen_port.value = s.listen_port || 6881;
-    form.elements.download_limit_kib.value = s.download_limit_kib || 0;
-    form.elements.upload_limit_kib.value = s.upload_limit_kib || 0;
-    form.elements.sequential_default.checked = !!s.sequential_default;
-    form.elements.extra_trackers.checked = s.extra_trackers !== false;
-    form.elements.up_mbps.value = "";
-    $("#btn-pick").hidden = !state.can_pick_folder;
+    const f = form.elements;
+    f.download_dir.value = s.download_dir || "";
+    f.listen_port.value = s.listen_port || 6881;
+    f.download_limit_kib.value = s.download_limit_kib || 0;
+    f.upload_limit_kib.value = s.upload_limit_kib || 0;
+    f.up_mbps.value = "";
+    f.seed_ratio_limit.value = s.seed_ratio_limit || 0;
+    f.sequential_default.checked = !!s.sequential_default;
+    f.encryption.value = s.encryption || "prefer";
+    f.extra_trackers.checked = s.extra_trackers !== false;
+    f.tracker_list.value = (s.tracker_list || []).join("\n");
+    f.watch_dir.value = s.watch_dir || "";
+    f.slow_detect.checked = s.slow_detect !== false;
+    f.slow_speed_kib.value = s.slow_speed_kib || 10;
+    f.slow_interval_s.value = String([180, 300, 600].includes(s.slow_interval_s) ? s.slow_interval_s : 300);
+    f.prevent_sleep.checked = s.prevent_sleep !== false;
+    for (const b of form.querySelectorAll(".pick")) b.hidden = !state.can_pick_folder;
     const note = $("#port-note");
     const busy = state.listen_port_effective && state.listen_port_effective !== s.listen_port;
     note.hidden = !busy;
     if (busy) note.textContent = `A porta ${s.listen_port} está em uso por outro programa; o Torreta está usando a ${state.listen_port_effective}.`;
+    renderRegister();
     dlg.showModal();
   });
   $("#settings-cancel").addEventListener("click", () => dlg.close());
@@ -351,21 +384,44 @@
     // Mbps -> bytes/s = Mbps * 125000; em KiB/s = / 1024; 80% disso
     form.elements.upload_limit_kib.value = Math.round(mbps * 125000 / 1024 * 0.8);
   });
-  $("#btn-pick").addEventListener("click", async () => {
+  for (const b of form.querySelectorAll(".pick")) {
+    b.addEventListener("click", async () => {
+      try {
+        const r = await api("POST", "/pick-folder");
+        if (r.path) form.elements[b.dataset.target].value = r.path;
+      } catch (e) { toast(e.message, "error"); }
+    });
+  }
+  $("#btn-register").addEventListener("click", async () => {
     try {
-      const r = await api("POST", "/pick-folder");
-      if (r.path) form.elements.download_dir.value = r.path;
-    } catch (e) { toast(e.message, "error"); }
+      const r = await api("POST", "/register");
+      state.registered = r.registered; renderRegister(); toast(r.message, "ok", 6000);
+    } catch (e) { toast(e.message, "error", 6000); }
+  });
+  $("#btn-unregister").addEventListener("click", async () => {
+    try {
+      const r = await api("POST", "/unregister");
+      state.registered = r.registered; renderRegister(); toast(r.message, "ok");
+    } catch (e) { toast(e.message, "error", 6000); }
   });
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const f = form.elements;
     const body = {
-      download_dir: form.elements.download_dir.value,
-      listen_port: Number(form.elements.listen_port.value),
-      download_limit_kib: Number(form.elements.download_limit_kib.value),
-      upload_limit_kib: Number(form.elements.upload_limit_kib.value),
-      sequential_default: form.elements.sequential_default.checked,
-      extra_trackers: form.elements.extra_trackers.checked,
+      download_dir: f.download_dir.value,
+      listen_port: Number(f.listen_port.value),
+      download_limit_kib: Number(f.download_limit_kib.value),
+      upload_limit_kib: Number(f.upload_limit_kib.value),
+      seed_ratio_limit: Number(f.seed_ratio_limit.value),
+      sequential_default: f.sequential_default.checked,
+      encryption: f.encryption.value,
+      extra_trackers: f.extra_trackers.checked,
+      tracker_list: f.tracker_list.value.split("\n").map((s) => s.trim()).filter(Boolean),
+      watch_dir: f.watch_dir.value.trim(),
+      slow_detect: f.slow_detect.checked,
+      slow_speed_kib: Number(f.slow_speed_kib.value),
+      slow_interval_s: Number(f.slow_interval_s.value),
+      prevent_sleep: f.prevent_sleep.checked,
     };
     try {
       state.settings = await api("PUT", "/settings", body);

@@ -1,10 +1,12 @@
 """Núcleo do Torreta: um invólucro fino e cuidadoso em volta da sessão do libtorrent.
 
-Decisões tomadas a partir da análise do uTorrent Web (mesmo engine por baixo):
+Decisões tomadas a partir da análise do uTorrent Web e do Free Download Manager
+(ambos usam libtorrent por baixo):
 - checa espaço em disco assim que os metadados chegam e pausa com mensagem clara,
   em vez de gerar milhares de erros "disco cheio" no log;
 - grava o resume data de cada torrent num arquivo próprio, atomicamente, a cada
   minuto e no encerramento, para nunca perder o estado da sessão;
+- trackers públicos só em torrents não privados, e em magnets só depois dos metadados;
 - nenhum contato com servidores além de trackers/DHT/peers do próprio torrent.
 """
 from __future__ import annotations
@@ -48,20 +50,14 @@ DHT_BOOTSTRAP = ",".join(
     ]
 )
 
-# trackers públicos estáveis, adicionados a torrents NÃO privados para achar mais peers
-# (mesma prática do qBittorrent; torrents privados nunca recebem trackers extras)
-PUBLIC_TRACKERS = [  # verificados respondendo em 2026-10
-    "udp://tracker.opentrackr.org:1337/announce",
-    "udp://open.demonii.com:1337/announce",
-    "udp://open.stealth.si:80/announce",
-    "udp://tracker.torrent.eu.org:451/announce",
-    "udp://exodus.desync.com:6969/announce",
-    "udp://explodie.org:6969/announce",
-]
 PUBLIC_TRACKER_TIER = 10
 
 # códigos de "disco cheio": Windows ERROR_DISK_FULL / HANDLE_DISK_FULL, POSIX ENOSPC
 DISK_FULL_CODES = {112, 39, 28}
+
+# SetThreadExecutionState (Windows): impede a suspensão enquanto houver download ativo
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
 
 
 def fmt_bytes(n: float) -> str:
@@ -128,12 +124,27 @@ def _delete_files_flag():
         return lt.session.delete_files
 
 
+def _enc_settings(mode: str) -> dict:
+    pol = lt.enc_policy
+    if mode == "none":
+        return {"out_enc_policy": pol.disabled, "in_enc_policy": pol.disabled}
+    if mode == "require":
+        return {
+            "out_enc_policy": pol.forced,
+            "in_enc_policy": pol.forced,
+            "allowed_enc_level": lt.enc_level.rc4,
+        }
+    return {"out_enc_policy": pol.enabled, "in_enc_policy": pol.enabled, "allowed_enc_level": lt.enc_level.both}
+
+
 class EngineError(Exception):
     """Erro com mensagem pronta para mostrar ao usuário."""
 
 
 class Engine:
     RESUME_INTERVAL = 60.0
+    WATCH_INTERVAL = 5.0
+    MAX_TORRENT_FILE = 20 * 1024 * 1024
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -142,7 +153,10 @@ class Engine:
         self.issues_path = cfg.data_dir / "issues.json"
 
         self._lock = threading.RLock()
-        self._issues: dict[str, dict[str, str]] = self._load_issues()
+        self._issues: dict[str, dict[str, str]] = self._load_issues()  # problemas (persistidos)
+        self._notes: dict[str, tuple[str, str]] = {}  # avisos brandos: (tipo, mensagem)
+        self._slow_since: dict[str, float] = {}
+        self._awake = False
         self._snapshot: list[dict[str, Any]] = []
         self._stop = threading.Event()
 
@@ -159,7 +173,7 @@ class Engine:
 
     def _settings(self) -> dict:
         port = self.listen_port
-        return {
+        s = {
             "user_agent": f"Torreta/0.1.0 libtorrent/{lt.__version__}",
             "listen_interfaces": f"0.0.0.0:{port},[::]:{port}",
             "enable_dht": True,
@@ -179,19 +193,21 @@ class Engine:
                 | lt.alert.category_t.storage_notification
             ),
         }
+        s.update(_enc_settings(self.cfg.encryption))
+        return s
 
     def apply_config(self) -> None:
         """Reaplica configurações que podem mudar em tempo de execução."""
         if self.cfg.listen_port != self.listen_port and _port_free(self.cfg.listen_port):
             self.listen_port = self.cfg.listen_port
         port = self.listen_port
-        self.ses.apply_settings(
-            {
-                "listen_interfaces": f"0.0.0.0:{port},[::]:{port}",
-                "download_rate_limit": self.cfg.download_limit_kib * 1024,
-                "upload_rate_limit": self.cfg.upload_limit_kib * 1024,
-            }
-        )
+        s = {
+            "listen_interfaces": f"0.0.0.0:{port},[::]:{port}",
+            "download_rate_limit": self.cfg.download_limit_kib * 1024,
+            "upload_rate_limit": self.cfg.upload_limit_kib * 1024,
+        }
+        s.update(_enc_settings(self.cfg.encryption))
+        self.ses.apply_settings(s)
 
     def _load_resume(self) -> None:
         for path in sorted(self.resume_dir.glob("*.fastresume")):
@@ -219,8 +235,6 @@ class Engine:
             if h.is_valid() and _hash_of(h) == tid:
                 return h
         raise EngineError("Torrent não encontrado.")
-
-    MAX_TORRENT_FILE = 20 * 1024 * 1024
 
     def add_uri(self, uri: str, sequential: bool | None = None) -> str:
         """Aceita link magnet ou URL http(s) de um arquivo .torrent."""
@@ -290,9 +304,9 @@ class Engine:
         ti = h.torrent_file()
         if ti is None or ti.priv():
             return 0
-        for url in PUBLIC_TRACKERS:
+        for url in self.cfg.tracker_list:
             h.add_tracker({"url": url, "tier": PUBLIC_TRACKER_TIER})
-        return len(PUBLIC_TRACKERS)
+        return len(self.cfg.tracker_list)
 
     def apply_extra_trackers_to_all(self) -> None:
         for h in self.ses.get_torrents():
@@ -309,6 +323,7 @@ class Engine:
         h = self._handle(tid)
         with self._lock:
             self._issues.pop(tid, None)
+            self._notes.pop(tid, None)
             self._persist_issues()
         h.clear_error()
         if not self._check_space(h, tid):
@@ -320,6 +335,12 @@ class Engine:
 
     def recheck(self, tid: str) -> None:
         self._handle(tid).force_recheck()
+
+    def reannounce(self, tid: str) -> None:
+        """Pede aos trackers e ao DHT uma nova lista de peers agora, sem esperar o intervalo."""
+        h = self._handle(tid)
+        h.force_reannounce()
+        h.force_dht_announce()
 
     def set_sequential(self, tid: str, on: bool) -> None:
         h = self._handle(tid)
@@ -334,6 +355,8 @@ class Engine:
         self.ses.remove_torrent(h, _delete_files_flag() if delete_files else 0)
         with self._lock:
             self._issues.pop(tid, None)
+            self._notes.pop(tid, None)
+            self._slow_since.pop(tid, None)
             self._persist_issues()
         for p in (self.resume_dir / f"{tid}.fastresume", self.resume_dir / f"{tid}.fastresume.tmp"):
             try:
@@ -418,6 +441,7 @@ class Engine:
         state = ESTADOS.get(st.state.name, st.state.name)
         error = st.errc.message() if st.errc.value() else None
         issue = self._issues.get(tid)
+        note = self._notes.get(tid)
         if paused:
             state = "pausado"
         if issue or error:
@@ -444,6 +468,7 @@ class Engine:
             "trackers": len(h.trackers()),
             "added_on": st.added_time,
             "issue": (issue or {}).get("message") or error,
+            "note": note[1] if note else None,
         }
 
     def _refresh_snapshot(self) -> None:
@@ -465,6 +490,14 @@ class Engine:
         with self._lock:
             self._issues[tid] = {"kind": kind, "message": message}
             self._persist_issues()
+
+    def _set_note(self, tid: str, kind: str, message: str | None) -> None:
+        with self._lock:
+            if message is None:
+                if self._notes.get(tid, ("",))[0] == kind:
+                    self._notes.pop(tid, None)
+            else:
+                self._notes[tid] = (kind, message)
 
     def _check_space(self, h: lt.torrent_handle, tid: str) -> bool:
         """Garante que cabe no disco; se não couber, pausa com explicação. True = ok."""
@@ -499,16 +532,107 @@ class Engine:
     def _loop(self) -> None:
         last_snapshot = 0.0
         last_resume = time.monotonic()
+        last_watch = 0.0
         while not self._stop.is_set():
             self.ses.wait_for_alert(500)
             self._handle_alerts()
             now = time.monotonic()
             if now - last_snapshot >= 1.0:
+                try:
+                    self._housekeeping()
+                except Exception as e:  # nunca derrubar o loop por um aviso
+                    log.debug("housekeeping: %s", e)
                 self._refresh_snapshot()
                 last_snapshot = now
             if now - last_resume >= self.RESUME_INTERVAL:
                 self._request_resume_all(only_dirty=True)
                 last_resume = now
+            if now - last_watch >= self.WATCH_INTERVAL:
+                self._scan_watch_dir()
+                last_watch = now
+        self._set_keep_awake(False)
+
+    def _housekeeping(self) -> None:
+        """Limite de proporção, aviso de lentidão e bloqueio de suspensão — uma passada por segundo."""
+        downloading = False
+        now = time.monotonic()
+        for h in self.ses.get_torrents():
+            if not h.is_valid():
+                continue
+            st = h.status()
+            tid = _hash_of(h)
+            paused = bool(st.flags & lt.torrent_flags.paused)
+
+            # para de semear ao atingir a proporção configurada
+            limit = self.cfg.seed_ratio_limit
+            if limit > 0 and st.is_finished and not paused and st.all_time_download > 0:
+                ratio = st.all_time_upload / st.all_time_download
+                if ratio >= limit:
+                    h.unset_flags(lt.torrent_flags.auto_managed)
+                    h.pause()
+                    self._set_note(tid, "ratio", f"Parou de semear: proporção {ratio:.2f} atingiu o limite de {limit:g}.")
+                    continue
+
+            active = st.has_metadata and not paused and not st.is_finished and st.state.name == "downloading"
+            if active:
+                downloading = True
+
+            # aviso (sem pausar) de download lento ou parado
+            if self.cfg.slow_detect and active:
+                if st.download_payload_rate < self.cfg.slow_speed_kib * 1024:
+                    since = self._slow_since.setdefault(tid, now)
+                    elapsed = now - since
+                    if elapsed >= self.cfg.slow_interval_s:
+                        why = "nenhum seed conectado" if st.num_seeds == 0 else f"só {st.num_seeds} seed(s)"
+                        self._set_note(
+                            tid, "slow",
+                            f"Lento: abaixo de {self.cfg.slow_speed_kib} KiB/s há {int(elapsed // 60)} min ({why}). "
+                            "Tente Reanunciar ou aguarde mais peers.",
+                        )
+                else:
+                    self._slow_since.pop(tid, None)
+                    self._set_note(tid, "slow", None)
+            else:
+                self._slow_since.pop(tid, None)
+                self._set_note(tid, "slow", None)
+
+        self._set_keep_awake(self.cfg.prevent_sleep and downloading)
+
+    def _set_keep_awake(self, on: bool) -> None:
+        if sys.platform != "win32" or on == self._awake:
+            return
+        try:
+            import ctypes
+
+            flags = ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if on else 0)
+            ctypes.windll.kernel32.SetThreadExecutionState(flags)  # type: ignore[attr-defined]
+            self._awake = on
+        except Exception as e:
+            log.debug("SetThreadExecutionState: %s", e)
+
+    def _scan_watch_dir(self) -> None:
+        d = self.cfg.watch_dir
+        if not d:
+            return
+        folder = Path(d)
+        if not folder.is_dir():
+            return
+        done = folder / "adicionados"
+        for f in list(folder.glob("*.torrent")):
+            try:
+                data = f.read_bytes()
+            except OSError:
+                continue  # provavelmente ainda sendo gravado pelo navegador
+            try:
+                self.add_torrent_bytes(data)
+                log.info("pasta vigiada: adicionado %s", f.name)
+            except EngineError as e:
+                log.warning("pasta vigiada: %s ignorado (%s)", f.name, e)
+            try:
+                done.mkdir(exist_ok=True)
+                f.replace(done / f.name)
+            except OSError as e:
+                log.warning("pasta vigiada: não consegui mover %s: %s", f.name, e)
 
     def _handle_alerts(self) -> int:
         saved = 0

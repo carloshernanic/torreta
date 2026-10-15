@@ -7,6 +7,7 @@ de credenciais fixas em users.conf do uTorrent Web).
 from __future__ import annotations
 
 import secrets
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -15,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__
+from . import __version__, integration
 from .engine import Engine, EngineError
 
 STATIC = Path(__file__).parent / "static"
@@ -41,11 +42,25 @@ class SettingsBody(BaseModel):
     upload_limit_kib: int | None = None
     sequential_default: bool | None = None
     extra_trackers: bool | None = None
+    tracker_list: list[str] | str | None = None
+    encryption: str | None = None
+    seed_ratio_limit: float | None = None
+    slow_detect: bool | None = None
+    slow_speed_kib: int | None = None
+    slow_interval_s: int | None = None
+    watch_dir: str | None = None
+    prevent_sleep: bool | None = None
 
 
-def create_app(engine: Engine, token: str, pick_folder: Callable[[], str | None] | None = None) -> FastAPI:
+def create_app(
+    engine: Engine,
+    token: str,
+    pick_folder: Callable[[], str | None] | None = None,
+    focus: Callable[[], None] | None = None,
+) -> FastAPI:
     app = FastAPI(title="Torreta", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.pick_folder = pick_folder
+    app.state.focus = focus
 
     def auth(request: Request) -> None:
         got = request.headers.get("x-torreta-token") or request.query_params.get("token") or ""
@@ -71,6 +86,8 @@ def create_app(engine: Engine, token: str, pick_folder: Callable[[], str | None]
             "settings": engine.cfg.to_dict(),
             "listen_port_effective": engine.listen_port,
             "can_pick_folder": app.state.pick_folder is not None,
+            "can_register": sys.platform == "win32",
+            "registered": integration.is_registered(),
         }
 
     @api.post("/torrents")
@@ -96,6 +113,11 @@ def create_app(engine: Engine, token: str, pick_folder: Callable[[], str | None]
     @api.post("/torrents/{tid}/recheck")
     def recheck(tid: str) -> dict:
         engine.recheck(tid)
+        return {"ok": True}
+
+    @api.post("/torrents/{tid}/reannounce")
+    def reannounce(tid: str) -> dict:
+        engine.reannounce(tid)
         return {"ok": True}
 
     @api.post("/torrents/{tid}/open")
@@ -131,7 +153,7 @@ def create_app(engine: Engine, token: str, pick_folder: Callable[[], str | None]
             raise EngineError(str(e)) from e
         engine.cfg.save()
         engine.apply_config()
-        if changes.get("extra_trackers"):
+        if changes.get("extra_trackers") or "tracker_list" in changes:
             engine.apply_extra_trackers_to_all()
         return engine.cfg.to_dict()
 
@@ -140,6 +162,26 @@ def create_app(engine: Engine, token: str, pick_folder: Callable[[], str | None]
         if app.state.pick_folder is None:
             raise HTTPException(404, "sem janela nativa")
         return {"path": app.state.pick_folder()}
+
+    @api.post("/focus")
+    def focus_route() -> dict:
+        if app.state.focus is not None:
+            app.state.focus()
+        return {"ok": True}
+
+    @api.post("/register")
+    def register() -> dict:
+        try:
+            return {"message": integration.register_windows(), "registered": integration.is_registered()}
+        except (RuntimeError, OSError) as e:
+            raise EngineError(str(e)) from e
+
+    @api.post("/unregister")
+    def unregister() -> dict:
+        try:
+            return {"message": integration.unregister_windows(), "registered": integration.is_registered()}
+        except (RuntimeError, OSError) as e:
+            raise EngineError(str(e)) from e
 
     app.include_router(api)
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
