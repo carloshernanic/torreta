@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Torreta</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">▲</span> Torreta</div>
+  <div class="totals">
+    <span title="Velocidade total de download">↓ <b id="tot-down">0 B/s</b></span>
+    <span title="Velocidade total de upload">↑ <b id="tot-up">0 B/s</b></span>
+  </div>
+  <button id="btn-settings" class="icon" title="Configurações" aria-label="Configurações">⚙</button>
+</header>
+
+<section class="addbar">
+  <input id="add-input" type="text" autocomplete="off" spellcheck="false"
+         placeholder="Cole um link magnet ou a URL de um .torrent e pressione Enter">
+  <button id="btn-add" class="primary">Adicionar</button>
+  <button id="btn-file" title="Escolher um arquivo .torrent">Arquivo .torrent…</button>
+  <input type="file" id="file-input" accept=".torrent,application/x-bittorrent" multiple hidden>
+</section>
+
+<nav class="filters" id="filters">
+  <button data-filter="all" class="active">Todos <span class="count" data-count="all"></span></button>
+  <button data-filter="downloading">Baixando <span class="count" data-count="downloading"></span></button>
+  <button data-filter="done">Concluídos <span class="count" data-count="done"></span></button>
+  <button data-filter="paused">Pausados <span class="count" data-count="paused"></span></button>
+  <button data-filter="problem">Com problema <span class="count" data-count="problem"></span></button>
+</nav>
+
+<div class="layout">
+  <main>
+    <ul id="list" class="list"></ul>
+    <div id="empty" class="empty">
+      <div class="empty-icon">▲</div>
+      <p>Nenhum torrent ainda.</p>
+      <p class="muted">Cole um link magnet acima ou arraste um arquivo .torrent para esta janela.</p>
+    </div>
+  </main>
+
+  <aside id="details" class="details" hidden>
+    <div class="details-head">
+      <h2 id="d-name">—</h2>
+      <button class="icon" id="d-close" title="Fechar" aria-label="Fechar">✕</button>
+    </div>
+    <dl class="meta">
+      <dt>Pasta</dt><dd id="d-path">—</dd>
+      <dt>Tamanho</dt><dd id="d-size">—</dd>
+      <dt>Baixado / Enviado</dt><dd id="d-transfer">—</dd>
+      <dt>Proporção</dt><dd id="d-ratio">—</dd>
+      <dt>Hash</dt><dd id="d-hash" class="mono">—</dd>
+    </dl>
+    <div class="files-head">
+      <h3>Arquivos</h3>
+      <div class="files-actions">
+        <button id="f-all" class="small">Marcar todos</button>
+        <button id="f-none" class="small">Desmarcar todos</button>
+      </div>
+    </div>
+    <ul id="d-files" class="files"></ul>
+    <p id="d-files-empty" class="muted" hidden>Aguardando metadados do torrent…</p>
+  </aside>
+</div>
+
+<div id="drop" class="drop" hidden><div>Solte o arquivo .torrent para adicionar</div></div>
+
+<dialog id="dlg-settings">
+  <form method="dialog" id="form-settings">
+    <h2>Configurações</h2>
+    <label>Pasta de downloads
+      <div class="inline">
+        <input name="download_dir" type="text" required>
+        <button type="button" id="btn-pick" class="small" hidden>Escolher…</button>
+      </div>
+    </label>
+    <div class="grid2">
+      <label>Porta de escuta
+        <input name="listen_port" type="number" min="1024" max="65535" required>
+        <small id="port-note" class="warn-text" hidden></small>
+      </label>
+      <label><span>&nbsp;</span>
+        <span class="check"><input name="sequential_default" type="checkbox"> Baixar em ordem por padrão</span>
+      </label>
+      <label>Limite de download (KiB/s, 0 = sem limite)
+        <input name="download_limit_kib" type="number" min="0" required>
+      </label>
+      <label>Limite de upload (KiB/s, 0 = sem limite)
+        <input name="upload_limit_kib" type="number" min="0" required>
+      </label>
+    </div>
+    <p class="muted small-text">O Torreta não mostra anúncios, não envia estatísticas e só fala com trackers, DHT e peers dos seus próprios torrents.</p>
+    <div class="actions">
+      <button type="button" value="cancel" class="ghost" id="settings-cancel">Cancelar</button>
+      <button type="submit" class="primary">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-remove">
+  <form method="dialog" id="form-remove">
+    <h2>Remover torrent</h2>
+    <p id="remove-name" class="muted"></p>
+    <label class="check"><input type="checkbox" name="delete_files"> Apagar também os arquivos baixados</label>
+    <div class="actions">
+      <button type="button" class="ghost" id="remove-cancel">Cancelar</button>
+      <button type="submit" class="danger">Remover</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<template id="row-tpl">
+  <li class="row">
+    <div class="row-main">
+      <div class="row-title">
+        <span class="name"></span>
+        <span class="badge"></span>
+      </div>
+      <div class="bar"><div class="fill"></div></div>
+      <div class="row-stats">
+        <span class="s-size"></span>
+        <span class="s-down"></span>
+        <span class="s-up"></span>
+        <span class="s-peers"></span>
+        <span class="s-eta"></span>
+      </div>
+      <div class="issue" hidden></div>
+    </div>
+    <div class="row-actions">
+      <button class="icon a-toggle" title="Pausar"></button>
+      <button class="icon a-seq" title="Baixar em ordem (para assistir enquanto baixa)">≡</button>
+      <button class="icon a-open" title="Abrir pasta">📂</button>
+      <button class="icon a-remove" title="Remover">🗑</button>
+    </div>
+  </li>
+</template>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
