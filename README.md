@@ -11,8 +11,14 @@ Feito depois de dissecar o uTorrent Web com o [REA](https://github.com/morluto/r
 - **Escolher quais arquivos baixar** dentro do torrent, com progresso por arquivo.
 - **Baixar em ordem** (sequencial) para assistir a um vídeo enquanto ele baixa.
 - Limites de velocidade, porta de escuta e pasta de downloads configuráveis.
-- **Trackers públicos adicionados automaticamente** a torrents não privados (mais fontes de peers; torrents privados nunca os recebem — em magnets, só depois dos metadados confirmarem que não é privado). Desligável em ⚙.
+- **Trackers públicos adicionados automaticamente** a torrents não privados (mais fontes de peers; torrents privados nunca os recebem — em magnets, só depois dos metadados confirmarem que não é privado). Lista editável em ⚙.
 - Ajuda para **limitar o upload a 80% da sua subida**, o que evita que o download caia em conexões assimétricas.
+- **App padrão para `magnet:` e `.torrent`** (botão em ⚙, sem administrador): clicar num link no navegador adiciona ao Torreta já aberto — instância única.
+- **Pasta vigiada**: todo `.torrent` salvo nela é adicionado sozinho.
+- **Impede a suspensão** do computador enquanto houver download ativo.
+- **Política de criptografia** entre peers (preferir / exigir / desligada).
+- **Limite de proporção**: para de semear ao atingir enviado ÷ baixado configurado.
+- **Aviso de download lento ou parado** (sem pausar) e botão **Reanunciar** para pedir peers novos.
 - DHT, PEX, LSD, uTP, UPnP/NAT-PMP e criptografia de peers ligados por padrão (engine **libtorrent 2.x**, o mesmo do qBittorrent e do próprio uTorrent Web).
 
 ## Em que ele é melhor que o uTorrent Web
@@ -27,6 +33,10 @@ Feito depois de dissecar o uTorrent Web com o [REA](https://github.com/morluto/r
 | Credencial fixa em `users.conf` + token CSRF | Token aleatório por execução; API só em `127.0.0.1`. |
 | Arquivos de preenchimento `.pad` aparecendo | Ocultos. |
 
+## O que foi aproveitado do Free Download Manager
+
+O FDM 6.35 foi analisado da mesma forma (pacote Linux extraído, binários e QML embutida inspecionados, sem executar nada). Por dentro ele é **libtorrent 2.0.14** — mais antigo que o 2.1 do Torreta — com Qt 6. A fama de velocidade vem do download HTTP segmentado, não do torrent. O que ele faz de bom e foi trazido para cá: associação a `magnet:`/`.torrent` com instância única, pasta vigiada, lista de trackers editável, política de criptografia, limite de proporção, detecção de download lento, "forçar reanúncio" e impedir suspensão. O que ficou de fora: ele envia relatórios para `up.freedownloadmanager.org`, baixa *parsers* de sites e um runtime Deno de servidores próprios e testa conectividade contra `ya.ru`; o Torreta não faz nada disso.
+
 ## Como rodar
 
 Pré-requisito: Python 3.11+ (o da Microsoft Store serve).
@@ -40,9 +50,10 @@ Na primeira execução ele cria o `.venv` e instala as dependências (`libtorren
 Outras formas:
 
 ```bat
-torreta.cmd "magnet:?xt=urn:btih:..."          :: já adiciona ao abrir
+torreta.cmd "magnet:?xt=urn:btih:..."          :: adiciona (ao app aberto, se houver) 
 torreta.cmd arquivo.torrent
 torreta.cmd --no-window                        :: abre no navegador em vez da janela
+torreta.cmd --register                         :: associa magnet: e .torrent (ou use o botão em ⚙)
 .venv\Scripts\python -m torreta --help
 ```
 
@@ -55,11 +66,14 @@ Onde ficam as coisas:
 
 ```
 torreta/
-  engine.py     invólucro do libtorrent: sessão, espaço em disco, resume data, prioridades
-  server.py     API HTTP local (FastAPI) com token por execução
-  config.py     config.json em %APPDATA%\Torreta
-  __main__.py   sobe servidor + janela (pywebview) ou navegador
-  static/       interface: HTML/CSS/JS puro, sem build
+  engine.py        invólucro do libtorrent: sessão, espaço em disco, resume data, prioridades,
+                   trackers extras, pasta vigiada, ratio, lentidão, suspensão
+  server.py        API HTTP local (FastAPI) com token por execução
+  config.py        config.json em %APPDATA%\Torreta
+  integration.py   instância única e associação magnet:/.torrent (registro HKCU)
+  __main__.py      sobe servidor + janela (pywebview) ou navegador
+  static/          interface: HTML/CSS/JS puro, sem build
+torreta_launcher.pyw   lançador sem console usado pela associação
 ```
 
 ## Sobre velocidade
@@ -71,7 +85,7 @@ O que limita a velocidade é, nesta ordem: quantos seeds o torrent tem, a sua co
 - Sem ícone na bandeja: fechar a janela encerra o cliente (gravando o estado antes).
 - Sem RSS, agendador nem criação de torrents.
 - Sem player embutido: use "baixar em ordem" e abra o arquivo no seu player.
-- Instalador `.exe` (PyInstaller) e associação de `magnet:`/`.torrent` ao app ainda não feitos.
+- Instalador `.exe` (PyInstaller) ainda não feito.
 
 ## Contribuindo
 
