@@ -245,13 +245,24 @@
     }
   });
 
-  // drag & drop
-  let dragDepth = 0;
-  document.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; $("#drop").hidden = false; });
-  document.addEventListener("dragover", (e) => e.preventDefault());
-  document.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("#drop").hidden = true; } });
+  // drag & drop — dragenter/dragleave não se equilibram no WebView2, então a
+  // sobreposição vive enquanto houver dragover e some sozinha 300 ms depois do último
+  let dropTimer = null;
+  const hideDrop = () => { clearTimeout(dropTimer); dropTimer = null; $("#drop").hidden = true; };
+  document.addEventListener("dragenter", (e) => e.preventDefault());
+  document.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    $("#drop").hidden = false;
+    clearTimeout(dropTimer);
+    dropTimer = setTimeout(hideDrop, 300);
+  });
+  document.addEventListener("dragend", hideDrop);
+  document.addEventListener("dragleave", (e) => { if (!e.relatedTarget) hideDrop(); });
+  document.addEventListener("mousemove", (e) => { if (e.buttons === 0 && !$("#drop").hidden) hideDrop(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideDrop(); });
+  window.addEventListener("blur", hideDrop);
   document.addEventListener("drop", (e) => {
-    e.preventDefault(); dragDepth = 0; $("#drop").hidden = true;
+    e.preventDefault(); hideDrop();
     const files = [...(e.dataTransfer.files || [])];
     if (files.length) return addFiles(files);
     const text = e.dataTransfer.getData("text") || "";
