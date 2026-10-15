@@ -52,6 +52,7 @@
       <dt>Tamanho</dt><dd id="d-size">—</dd>
       <dt>Baixado / Enviado</dt><dd id="d-transfer">—</dd>
       <dt>Proporção</dt><dd id="d-ratio">—</dd>
+      <dt>Trackers</dt><dd id="d-trackers">—</dd>
       <dt>Hash</dt><dd id="d-hash" class="mono">—</dd>
     </dl>
     <div class="files-head">
@@ -91,7 +92,15 @@
       <label>Limite de upload (KiB/s, 0 = sem limite)
         <input name="upload_limit_kib" type="number" min="0" required>
       </label>
+      <label>Velocidade de upload da sua internet (Mbps)
+        <div class="inline">
+          <input name="up_mbps" type="number" min="0" step="0.1" placeholder="ex.: 50">
+          <button type="button" id="btn-up80" class="small" title="Preenche o limite de upload com 80% da sua subida">Usar 80%</button>
+        </div>
+        <small class="muted">Em conexões com upload bem menor que o download, limitar o upload a ~80% evita que o download caia.</small>
+      </label>
     </div>
+    <label class="check"><input name="extra_trackers" type="checkbox"> Adicionar trackers públicos a torrents não privados (mais fontes de peers)</label>
     <p class="muted small-text">O Torreta não mostra anúncios, não envia estatísticas e só fala com trackers, DHT e peers dos seus próprios torrents.</p>
     <div class="actions">
       <button type="button" value="cancel" class="ghost" id="settings-cancel">Cancelar</button>

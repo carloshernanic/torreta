@@ -48,6 +48,18 @@ DHT_BOOTSTRAP = ",".join(
     ]
 )
 
+# trackers públicos estáveis, adicionados a torrents NÃO privados para achar mais peers
+# (mesma prática do qBittorrent; torrents privados nunca recebem trackers extras)
+PUBLIC_TRACKERS = [  # verificados respondendo em 2026-10
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.demonii.com:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://explodie.org:6969/announce",
+]
+PUBLIC_TRACKER_TIER = 10
+
 # códigos de "disco cheio": Windows ERROR_DISK_FULL / HANDLE_DISK_FULL, POSIX ENOSPC
 DISK_FULL_CODES = {112, 39, 28}
 
@@ -155,6 +167,10 @@ class Engine:
             "enable_upnp": True,
             "enable_natpmp": True,
             "dht_bootstrap_nodes": DHT_BOOTSTRAP,
+            # sem isto o libtorrent anuncia só no primeiro tier que responde e os
+            # trackers públicos extras nunca seriam consultados
+            "announce_to_all_tiers": True,
+            "announce_to_all_trackers": True,
             "download_rate_limit": self.cfg.download_limit_kib * 1024,
             "upload_rate_limit": self.cfg.upload_limit_kib * 1024,
             "alert_mask": (
@@ -262,9 +278,26 @@ class Engine:
         tid = _hash_of(h)
         if h.status().has_metadata:
             self._check_space(h, tid)
+            self._add_public_trackers(h)
         h.save_resume_data(_save_info_dict_flag())
         self._refresh_snapshot()
         return tid
+
+    def _add_public_trackers(self, h: lt.torrent_handle) -> int:
+        """Só com metadados em mãos (para saber se é privado). Idempotente: o libtorrent ignora URL repetida."""
+        if not self.cfg.extra_trackers:
+            return 0
+        ti = h.torrent_file()
+        if ti is None or ti.priv():
+            return 0
+        for url in PUBLIC_TRACKERS:
+            h.add_tracker({"url": url, "tier": PUBLIC_TRACKER_TIER})
+        return len(PUBLIC_TRACKERS)
+
+    def apply_extra_trackers_to_all(self) -> None:
+        for h in self.ses.get_torrents():
+            if h.is_valid():
+                self._add_public_trackers(h)
 
     def pause(self, tid: str) -> None:
         h = self._handle(tid)
@@ -408,6 +441,7 @@ class Engine:
             "save_path": st.save_path,
             "uploaded": st.all_time_upload,
             "downloaded": st.all_time_download,
+            "trackers": len(h.trackers()),
             "added_on": st.added_time,
             "issue": (issue or {}).get("message") or error,
         }
@@ -490,13 +524,17 @@ class Engine:
                 elif isinstance(a, lt.metadata_received_alert):
                     tid = _hash_of(a.handle)
                     self._check_space(a.handle, tid)
+                    self._add_public_trackers(a.handle)
                     a.handle.save_resume_data(_save_info_dict_flag())
                 elif isinstance(a, lt.file_error_alert):
                     self._on_file_error(a)
                 elif isinstance(a, lt.torrent_finished_alert):
                     a.handle.save_resume_data(_save_info_dict_flag())
-                elif isinstance(a, lt.add_torrent_alert) and a.error.value():
-                    log.warning("falha ao adicionar: %s", a.error.message())
+                elif isinstance(a, lt.add_torrent_alert):
+                    if a.error.value():
+                        log.warning("falha ao adicionar: %s", a.error.message())
+                    else:  # torrents restaurados do resume data na abertura
+                        self._add_public_trackers(a.handle)
                 elif isinstance(a, lt.listen_failed_alert):
                     log.warning("escuta falhou: %s", a.message())
             except RuntimeError as e:

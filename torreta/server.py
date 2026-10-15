@@ -40,6 +40,7 @@ class SettingsBody(BaseModel):
     download_limit_kib: int | None = None
     upload_limit_kib: int | None = None
     sequential_default: bool | None = None
+    extra_trackers: bool | None = None
 
 
 def create_app(engine: Engine, token: str, pick_folder: Callable[[], str | None] | None = None) -> FastAPI:
@@ -130,6 +131,8 @@ def create_app(engine: Engine, token: str, pick_folder: Callable[[], str | None]
             raise EngineError(str(e)) from e
         engine.cfg.save()
         engine.apply_config()
+        if changes.get("extra_trackers"):
+            engine.apply_extra_trackers_to_all()
         return engine.cfg.to_dict()
 
     @api.post("/pick-folder")

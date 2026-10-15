@@ -23,6 +23,7 @@ class Config:
     download_limit_kib: int = 0  # 0 = ilimitado
     upload_limit_kib: int = 0  # 0 = ilimitado
     sequential_default: bool = False
+    extra_trackers: bool = True  # trackers públicos em torrents não privados
     data_dir: Path = field(default_factory=default_data_dir)
 
     # campos que não vão para o JSON
@@ -72,7 +73,7 @@ class Config:
                     raise ValueError("A porta precisa estar entre 1024 e 65535.")
             elif key in ("download_limit_kib", "upload_limit_kib"):
                 value = max(0, int(value))
-            elif key == "sequential_default":
+            elif key in ("sequential_default", "extra_trackers"):
                 value = bool(value)
             setattr(self, key, value)
 

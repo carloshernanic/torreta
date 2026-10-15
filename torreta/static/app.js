@@ -158,6 +158,7 @@
     $("#d-size").textContent = t.has_metadata ? fmtBytes(t.size) : "—";
     $("#d-transfer").textContent = `${fmtBytes(t.downloaded)} / ${fmtBytes(t.uploaded)}`;
     $("#d-ratio").textContent = t.downloaded ? (t.uploaded / t.downloaded).toFixed(2) : "—";
+    $("#d-trackers").textContent = t.trackers != null ? String(t.trackers) : "—";
     $("#d-hash").textContent = t.id;
     $("#d-files-empty").hidden = t.has_metadata;
   }
@@ -334,6 +335,8 @@
     form.elements.download_limit_kib.value = s.download_limit_kib || 0;
     form.elements.upload_limit_kib.value = s.upload_limit_kib || 0;
     form.elements.sequential_default.checked = !!s.sequential_default;
+    form.elements.extra_trackers.checked = s.extra_trackers !== false;
+    form.elements.up_mbps.value = "";
     $("#btn-pick").hidden = !state.can_pick_folder;
     const note = $("#port-note");
     const busy = state.listen_port_effective && state.listen_port_effective !== s.listen_port;
@@ -342,6 +345,12 @@
     dlg.showModal();
   });
   $("#settings-cancel").addEventListener("click", () => dlg.close());
+  $("#btn-up80").addEventListener("click", () => {
+    const mbps = Number(form.elements.up_mbps.value);
+    if (!(mbps > 0)) { toast("Informe a velocidade de upload em Mbps (veja num teste de velocidade).", "error"); return; }
+    // Mbps -> bytes/s = Mbps * 125000; em KiB/s = / 1024; 80% disso
+    form.elements.upload_limit_kib.value = Math.round(mbps * 125000 / 1024 * 0.8);
+  });
   $("#btn-pick").addEventListener("click", async () => {
     try {
       const r = await api("POST", "/pick-folder");
@@ -356,6 +365,7 @@
       download_limit_kib: Number(form.elements.download_limit_kib.value),
       upload_limit_kib: Number(form.elements.upload_limit_kib.value),
       sequential_default: form.elements.sequential_default.checked,
+      extra_trackers: form.elements.extra_trackers.checked,
     };
     try {
       state.settings = await api("PUT", "/settings", body);
